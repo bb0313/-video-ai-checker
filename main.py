@@ -1,22 +1,28 @@
 import os
+import json
 import time
 import uuid
 from fastapi import FastAPI, File, UploadFile
 from google.oauth2 import service_account
-from google.genai import client
-from google.genai import types
+from google.genai import client, types
 
 app = FastAPI()
 
-# 1. 載入 Service Account JSON 金鑰
-credentials = service_account.Credentials.from_service_account_file(
-    'service_account.json'
-)
+# 1. 從環境變數讀取 JSON 字串
+sa_info_str = os.getenv("GCP_SA_KEY")
 
-# 2. 初始化 Vertex AI Client
+if sa_info_str:
+    # 透過字串直接建立憑證
+    sa_info = json.loads(sa_info_str)
+    credentials = service_account.Credentials.from_service_account_info(sa_info)
+else:
+    # 本地測試時如果沒設定環境變數，回退讀取本地檔案
+    credentials = service_account.Credentials.from_service_account_file('service_account.json')
+
+# 2. 初始化 Client
 ai_client = client.Client(
     vertexai=True,
-    project="zhenapp-451200",  # ⚠️ 請替換為你的 GCP 專案 ID (例如 zhenAPP 的實際 ID)
+    project="zhenapp-451200",  # ⚠️ 請確認這是正確的 GCP Project ID
     location="us-central1",
     credentials=credentials
 )
