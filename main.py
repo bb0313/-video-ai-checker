@@ -2,7 +2,7 @@ import os
 import time
 import uuid
 from fastapi import FastAPI, UploadFile, File
-
+import google.generativeai as genai
 
 app = FastAPI()
 
