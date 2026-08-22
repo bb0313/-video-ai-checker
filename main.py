@@ -21,7 +21,7 @@ async def upload_file(file: UploadFile = File(...)):
         with open(temp_path, "wb") as f:
             f.write(await file.read())
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         # 明確指定 mime_type
         genai_file = genai.upload_file(path=temp_path, mime_type=file.content_type)
 
