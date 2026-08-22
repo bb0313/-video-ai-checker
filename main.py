@@ -6,7 +6,6 @@ import google.generativeai as genai
 
 app = FastAPI()
 
-# ⚠️ 只要這行就好，不要去讀取任何 .json 檔案
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 @app.get("/")
