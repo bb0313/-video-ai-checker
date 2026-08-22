@@ -1,70 +1,46 @@
 import os
-import json
 import time
 import uuid
-from fastapi import FastAPI, File, UploadFile
-from google.oauth2 import service_account
-from google.genai import client, types
+from fastapi import FastAPI, UploadFile, File
+import google.generativeai as genai
 
 app = FastAPI()
 
-# 1. 從環境變數讀取 JSON 字串
-sa_info_str = os.getenv("GCP_SA_KEY")
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-if sa_info_str:
-    # 透過字串直接建立憑證
-    sa_info = json.loads(sa_info_str)
-    credentials = service_account.Credentials.from_service_account_info(sa_info)
-else:
-    # 本地測試時如果沒設定環境變數，回退讀取本地檔案
-    credentials = service_account.Credentials.from_service_account_file('service_account.json')
-
-# 2. 初始化 Client
-ai_client = client.Client(
-    vertexai=True,
-    project="zhenapp-451200",  # ⚠️ 請確認這是正確的 GCP Project ID
-    location="us-central1",
-    credentials=credentials
-)
+@app.get("/")
+def home():
+    return {"status": "AI File Checker Online"}
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    content_type = file.content_type
+    # 1. 取得檔案副檔名與 MIME 類型
+    content_type = file.content_type  # 例如: image/jpeg 或 video/mp4
     ext = file.filename.split(".")[-1] if "." in file.filename else "tmp"
     temp_path = f"{uuid.uuid4()}.{ext}"
-
+    
     try:
-        # 儲存暫存檔
+        # 2. 儲存檔案
         with open(temp_path, "wb") as f:
             f.write(await file.read())
-
-        # 使用 SDK 上傳檔案至 Vertex AI Media Storage
-        uploaded_file = ai_client.files.upload(
-            file=temp_path,
-            config=types.UploadFileConfig(mime_type=content_type)
-        )
-
-        # 影片處理等待
-        if content_type.startswith("video"):
-            while uploaded_file.state.name == "PROCESSING":
-                time.sleep(2)
-                uploaded_file = ai_client.files.get(name=uploaded_file.name)
-
-        # 呼叫 Gemini 進行分析
-        prompt = "分析此檔案：1.摘要 2.事實查核 3.AI生成痕跡 4.信任分數(0-100)。用繁體中文回答。"
         
-        response = ai_client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=[uploaded_file, prompt]
-        )
+        # 3. 上傳給 Gemini (修正點：明確指定 mime_type)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        genai_file = genai.upload_file(path=temp_path, mime_type=content_type)
 
-        # 刪除本地暫存
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
+        # 4. 如果是影片，等待處理
+        if content_type.startswith("video"):
+            while genai_file.state.name == "PROCESSING":
+                time.sleep(2)
+                genai_file = genai.get_file(genai_file.name)
+        
+        # 5. 讓 AI 分析
+        prompt = "分析此檔案：1.摘要 2.事實查核 3.AI生成痕跡 4.信任分數(0-100)。用繁體中文回答。"
+        response = model.generate_content([genai_file, prompt])
+        
+        os.remove(temp_path)
         return {"report": response.text}
 
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        if os.path.exists(temp_path): os.remove(temp_path)
         return {"report": f"伺服器出錯: {str(e)}"}
