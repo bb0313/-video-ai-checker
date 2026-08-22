@@ -1,67 +1,54 @@
 import os
 import time
 import uuid
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException
 import google.generativeai as genai
-import yt_dlp
 
 app = FastAPI()
 
-# 確保從 Render 環境變數抓取金鑰
-API_KEY = os.environ.get("GEMINI_API_KEY")
-genai.configure(api_key=API_KEY)
-
-def get_best_model():
-    """自動偵測目前可用的模型"""
-    try:
-        # 列出所有可用的模型
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # 優先順序：1.5-flash -> 3.6-flash -> 1.5-pro -> 第一個可用的
-        for target in ['models/gemini-1.5-flash', 'models/gemini-3.6-flash', 'models/gemini-1.5-pro']:
-            if target in models:
-                return target
-        return models[0] if models else "gemini-1.5-flash"
-    except:
-        return "gemini-1.5-flash" # 保底方案
+# 從環境變數讀取 API Key
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 @app.get("/")
 def home():
-    return {"status": "AI Checker Online", "using_model": get_best_model()}
+    return {"status": "AI Checker Online"}
 
-@app.post("/check")
-async def check_video(video_url: str = Form(...)):
-    filename = f"video_{uuid.uuid4()}.mp4"
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    # 1. 產生暫存路徑
+    file_ext = file.filename.split(".")[-1]
+    temp_path = f"{uuid.uuid4()}.{file_ext}"
+    
     try:
-        # 1. 下載影片
-        ydl_opts = {
-            'format': 'best',
-            'outtmpl': filename,
-            'quiet': True,
-            'nocheckcertificate': True
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+        # 2. 儲存上傳的檔案
+        with open(temp_path, "wb") as f:
+            f.write(await file.read())
         
-        # 2. 自動偵測模型並分析
-        target_model = get_best_model()
-        print(f"Using model: {target_model}")
+        # 3. 上傳到 Gemini
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        genai_file = genai.upload_file(path=temp_path)
+
+        # 4. 如果是影片，需要等待處理
+        if file.content_type.startswith("video"):
+            while genai_file.state.name == "PROCESSING":
+                time.sleep(2)
+                genai_file = genai.get_file(genai_file.name)
         
-        model = genai.GenerativeModel(target_model)
-        video_file = genai.upload_file(path=filename)
+        # 5. 讓 AI 分析內容
+        prompt = """
+        你是一個專業的影音真偽鑑定專家。請分析這份檔案並回答：
+        1. 內容摘要：這是什麼內容？
+        2. 事實查核：內容中提到的資訊是否屬實？
+        3. AI 偵測：是否有 AI 生成痕跡（如手指不自然、背景閃爍、皮膚過於平滑）？
+        4. 總結：信任分數 (0-100)。
+        請用繁體中文詳細回答。
+        """
+        response = model.generate_content([genai_file, prompt])
         
-        while video_file.state.name == "PROCESSING":
-            time.sleep(2)
-            video_file = genai.get_file(video_file.name)
-            
-        prompt = "分析這段影片：1.事實查核 2.AI生成痕跡偵測 3.信任分數。請用繁體中文回答。"
-        response = model.generate_content([video_file, prompt])
-        
-        if os.path.exists(filename):
-            os.remove(filename)
-            
+        # 6. 清理暫存檔
+        os.remove(temp_path)
         return {"report": response.text}
+
     except Exception as e:
-        if os.path.exists(filename):
-            os.remove(filename)
-        return {"report": f"發生錯誤: {str(e)}"}
+        if os.path.exists(temp_path): os.remove(temp_path)
+        return {"report": f"伺服器錯誤: {str(e)}"}
